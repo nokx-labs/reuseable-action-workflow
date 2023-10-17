@@ -1,0 +1,72 @@
+on:
+  workflow_call:
+    inputs:
+      db_major_version:
+        description: 'Database major version'
+        required: true
+      db_host:
+        description: 'Database host'
+        required: true
+      db_port:
+        description: 'Database port'
+        required: true
+      db_user:
+        description: 'Database user'
+        required: true
+      db_password:
+        description: 'Database password'
+        required: true
+      db_name:
+        description: 'Database name'
+        required: true
+      s3_bucket:
+        description: 'S3 bucket name'
+        required: true
+      s3_endpoint:
+        description: 'S3 endpoint'
+        required: true
+      s3_access_key:
+        description: 'S3 access key'
+        required: true
+      s3_access_secret:
+        description: 'S3 access secret'
+        required: true
+      s3_path:
+        description: 'S3 path'
+        required: true
+      s3_region:
+        description: 'S3 region'
+        required: true
+
+jobs:
+  backup-database:
+    container:
+      image: postgres:${{ inputs.db_major_version }}
+      env:
+        PGPASSWORD: ${{ inputs.db_password }}
+      steps:
+      - name: Backup database
+        id: backup
+        run: |
+          dump_filename=$(date +%Y%m%d%H%M%S).sql
+          echo dump_filename=$dump_filename >> $GITHUB_OUTPUT
+          pg_dump -h ${{ inputs.db_host }} -p ${{ inputs.db_port }} -U ${{ inputs.db_user }} -d ${{ inputs.db_name }} -f /tmp/$dump_filename
+      - uses: actions/upload-artifact@v2
+        with:
+          name: ${{ steps.backup.outputs.dump_filename }}
+          path: /tmp/$dump_filename
+  copy-dump-file-to-s3:
+    needs: backup-database
+    container: amazon/aws-cli
+    env:
+      AWS_ACCESS_KEY_ID: ${{ inputs.s3_access_key }}
+      AWS_SECRET_ACCESS_KEY: ${{ inputs.s3_access_secret }}
+      DUMP_FILENAME: ${{ jobs.backup-database.steps.backup.outputs.dump_filename }}
+    steps:
+    - name: Download dump file
+      uses: actions/download-artifact@v2
+      with:
+        name: ${{ env.DUMP_FILENAME }}
+    - name: Copy to S3
+      run: |
+        aws s3 cp ${{ env.DUMP_FILENAME }} s3://${{ inputs.s3_bucket }}/${{ inputs.s3_path }}/${{ env.DUMP_FILENAME }} --endpoint-url ${{ inputs.s3_endpoint }} --region ${{ inputs.s3_region }}
